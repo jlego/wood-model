@@ -46,11 +46,9 @@ class Model {
       if (key == '_id') continue;
       // 建索引
       if (item.index) {
-        if(cluster.worker == null || WOOD.config.service.initloop.workerid == cluster.worker.id){
-          let indexField = {};
-          indexField[key] = item.index == 'text' ? item.index : 1 ;
-          this.db.index(indexField);
-        }
+        let indexField = {};
+        indexField[key] = item.index == 'text' ? item.index : 1 ;
+        this.db.index(indexField);
       }
       //表关联
       if (item.key && item.as && item.from) {
