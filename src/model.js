@@ -6,7 +6,7 @@ const {
   catchErr,
   isEmpty,
   getListKey
-} = require('wood-util');
+} = require('wood-util')();
 const cluster = require('cluster');
 let largelimit = 20000; //限制不能超过2万条数据返回
 const _timeout = 0;

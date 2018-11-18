@@ -17,7 +17,7 @@ module.exports = (app, config = {}) => {
       if(tableName){
         if(app.models.has(tableName)){
           let _model = app.models.get(tableName);
-          app.models.resetData();
+          if(_model) _model.resetData();
           return _model;
         }
         if (tableName && fields) {
