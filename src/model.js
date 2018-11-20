@@ -204,7 +204,7 @@ class Model {
       if (!hasLock.data) {
         let query = data;
         if(!data._isQuery){
-          query = Query.getQuery();
+          query = Query();
           if (typeof data === 'number') {
             query.where({
               rowid: data
@@ -260,7 +260,7 @@ class Model {
           }
           query = data;
         }else{
-          query = Query.getQuery({body: { data }});
+          query = Query({body: { data }});
         }
         // if (WOOD.config.isDebug) console.warn(`请求列表, ${hasKey ? '有' : '无'}listKey`, Util.isEmpty(this.relation));
         if (!Util.isEmpty(this.select)) query.select(this.select);
