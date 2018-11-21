@@ -3,7 +3,9 @@
 const { Query } = require('wood-query')();
 const { Util } = require('wood-util')();
 const cluster = require('cluster');
-let largelimit = 20000; //限制不能超过2万条数据返回
+const mongodb = require('mongodb');
+const ObjectId = mongodb.ObjectID;
+const largelimit = 20000; //限制不能超过2万条数据返回
 const _timeout = 0;
 const _KeyTimeout = 60 * 1; //设置listkey过期时间，秒
 
@@ -242,22 +244,22 @@ class Model {
     }else{
       if (!hasLock.data) {
         let hasKey = false, largepage = 1;
-        let query = null;
-        if(data._isQuery){
-          query = data;
-        }else{
-          query = Query({body: { data }});
-        }
-        data = query.toJSON();
-        let limit = data.limit == undefined ? 20 : Number(data.limit), page = data.page || 1;
-        largepage = data.largepage || 1;
+        let query = data._isQuery ? data : Query(data);
+        let _data = query.toJSON();
+        let limit = _data.limit == undefined ? 20 : Number(_data.limit), 
+          page = _data.page || 1,
+          idObj = {};
+        largepage = _data.largepage || 1;
         page = page % Math.ceil(largelimit / limit) || 1;
         hasKey = await this.redis.existKey(cacheKey); //key是否存在
         if (hasKey) {
           let startIndex = (page - 1) * limit;
-          data[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
-          data[this.primarykey] = data[this.primarykey].map(item => parseInt(item));
+          idObj[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
+          if(this.primarykey === 'rowid'){
+            idObj[this.primarykey] = idObj[this.primarykey].map(item => parseInt(item));
+          }
         }
+        query.where(idObj);
         if (!Util.isEmpty(this.select)) query.select(this.select);
         if (!Util.isEmpty(this.relation)) query.populate(this.relation);
         let counts = this.db.count(query),
@@ -275,16 +277,15 @@ class Model {
               let startNum = (largepage - 1) * largelimit;
               docs = docs.slice(startNum, startNum + largelimit);
             }
-            await this.redis.listPush(cacheKey, docs.map(item => item[this.primarykey]));
+            await this.redis.listPush(cacheKey, docs.map(item => item[this.primarykey].toString()));
             this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
-            return this.findList(data, false, addLock);
+            return this.findList(data, '', addLock);
           }
           return {
             count: Number(countResult.data),
             list: docs || []
           };
         }
-        return [];
       }else{
         await new Promise((resolve, reject) => {
           setTimeout(() => {
