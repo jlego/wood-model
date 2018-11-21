@@ -11,6 +11,7 @@ class Model {
   constructor(opts = {}) {
     this._hasdata = false;
     this.tableName = opts.tableName || '';
+    this.primarykey = opts.primarykey || '_id'; //默认主键名
     this.fields = opts.fields || {};
     this.select = opts.select || {};
     this.relation = {};
@@ -83,54 +84,55 @@ class Model {
   }
 
   // 是否新的
-  isNew() {
-    return !this.rowid;
+  isNew(data) {
+    return !data[this.primarykey];
   }
 
   //新增数据
   async create(data = {}, addLock = true, hascheck = true) {
     if (!data) throw Util.error('create方法的参数data不能为空');
     if(!Util.isEmpty(data)) this.setData(data);
-    let rowid = await this.redis.rowid();
-    if (WOOD.config.isDebug) console.warn('新增rowid: ', rowid);
-    if (rowid || data.rowid == 0) {
-      this.setData('rowid', rowid);
-      let err = hascheck ? this.fields.validate() : false;
-      if (err) throw Util.error(err);
-      const lock = addLock ? await Util.catchErr(this.redis.lock()) : {data: 1};
-      if (lock.data) {
-        let result = await Util.catchErr(this.db.create(this.getData()));
-        if(addLock) this.redis.unlock(lock.data);
-        if(result.err) throw Util.error(result.err);
-        return result.data;
-      }else{
-        throw Util.error(lock.err);
-      }
+    if (this.primarykey === 'rowid' || data.rowid == 0){
+      let id = await this.redis.rowid();
+      this.setData('rowid', id);
+      if (WOOD.config.isDebug) console.warn('新增id: ', id);
     }
-    throw Util.error(false);
+    let err = hascheck ? this.fields.validate() : false;
+    if (err) throw Util.error(err);
+    const lock = addLock ? await Util.catchErr(this.redis.lock()) : {data: 1};
+    if (lock.data) {
+      let result = await Util.catchErr(this.db.create(this.getData()));
+      if(addLock) this.redis.unlock(lock.data);
+      if(result.err) throw Util.error(result.err);
+      return result.data;
+    }else{
+      throw Util.error(lock.err);
+    }
   }
 
   // 更新数据
   async update(data = {}, addLock = true, hascheck = true, isFindOneAndUpdate) {
     if (!data) throw Util.error('update方法的参数data不能为空');
     if(!Util.isEmpty(data)) this.setData(data);
-    if (!this.isNew() || data.rowid) {
+    if (!this.isNew()) {
       let err = hascheck ? this.fields.validate() : false,
         hasSet = false,
-        rowid = this.rowid || data.rowid;
+        id = data[this.primarykey];
       if (err) {
         throw Util.error(err);
       } else {
         let lock = addLock ? await Util.catchErr(this.redis.lock()) : {data: 1};
         if (lock.data) {
-          delete data.rowid;
+          delete data[this.primarykey];
           let keys = Object.keys(data),
-            method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update';
+            method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update',
+            idObj = {};
           hasSet = keys[0].indexOf('$') === 0;
-          const result = await Util.catchErr(this.db[method]({ rowid }, hasSet ? data : { $set: data }));
+          idObj[this.primarykey] = id;
+          const result = await Util.catchErr(this.db[method](idObj, hasSet ? data : { $set: data }));
           if(addLock) this.redis.unlock(lock.data);
           if (result.data){
-            return isFindOneAndUpdate ? result.data : { rowid };
+            return isFindOneAndUpdate ? result.data : idObj;
           }else{
             throw Util.error(result.err);
           }
@@ -150,7 +152,7 @@ class Model {
   async save() {
     let data = this.getData(false);
     if (Util.isEmpty(data) || !data) throw Util.error('save方法的data为空');
-    if (!this.isNew() || data.rowid) {
+    if (!this.isNew()) {
       const updateOk = await Util.catchErr(this.update());
       if (updateOk.err) throw Util.error(updateOk.err);
       return updateOk.data;
@@ -202,13 +204,12 @@ class Model {
       throw Util.error(hasLock.err);
     }else{
       if (!hasLock.data) {
-        let query = data;
+        let query = data, idObj = {};
         if(!data._isQuery){
           query = Query();
           if (typeof data === 'number') {
-            query.where({
-              rowid: data
-            });
+            idObj[this.primarykey] = data;
+            query.where(idObj);
           } else if (typeof data === 'object') {
             query.where(data);
           }
@@ -233,36 +234,30 @@ class Model {
   }
 
   // 查询数据列表
-  async findList(data, hasCache = true, addLock = true) {
+  async findList(data, cacheKey = '', addLock = true) {
     if (!data) throw Util.error('findList方法参数data不能为空');
     let hasLock = addLock ? await Util.catchErr(this.redis.hasLock()) : {};
     if(hasLock.err){
       throw Util.error(hasLock.err);
     }else{
       if (!hasLock.data) {
-        let listKey = '', hasKey = false, largepage = 1;
+        let hasKey = false, largepage = 1;
         let query = null;
         if(data._isQuery){
-          // 若有req对像，则读缓存
-          if(data.req && data.req.url){
-            let limit = data.req.body.data.limit == undefined ? 20 : Number(data.req.body.data.limit),
-              page = data.req.body.data.page || 1;
-            largepage = data.req.body.data.largepage || 1;
-            page = page % Math.ceil(largelimit / limit) || 1;
-            listKey = await Util.getListKey(data.req); //生成listkey
-            hasKey = await this.redis.existKey(listKey); //key是否存在
-            if (hasKey) {
-              let startIndex = (page - 1) * limit;
-              data.req.body.data.rowid = await this.redis.listSlice(listKey, startIndex, startIndex + limit - 1);
-              data.req.body.data.rowid = data.req.body.data.rowid.map(item => parseInt(item));
-            }
-            data.where(data.req.body.data);
-          }
           query = data;
         }else{
           query = Query({body: { data }});
         }
-        // if (WOOD.config.isDebug) console.warn(`请求列表, ${hasKey ? '有' : '无'}listKey`, Util.isEmpty(this.relation));
+        data = query.toJSON();
+        let limit = data.limit == undefined ? 20 : Number(data.limit), page = data.page || 1;
+        largepage = data.largepage || 1;
+        page = page % Math.ceil(largelimit / limit) || 1;
+        hasKey = await this.redis.existKey(cacheKey); //key是否存在
+        if (hasKey) {
+          let startIndex = (page - 1) * limit;
+          data[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
+          data[this.primarykey] = data[this.primarykey].map(item => parseInt(item));
+        }
         if (!Util.isEmpty(this.select)) query.select(this.select);
         if (!Util.isEmpty(this.relation)) query.populate(this.relation);
         let counts = this.db.count(query),
@@ -273,15 +268,15 @@ class Model {
           throw Util.error(docsResult.err || countResult.err);
         }else{
           let docs = docsResult.data;
-          // 缓存rowid
-          if (hasCache && !hasKey && docs.length) {
+          // 缓存id
+          if (cacheKey && !hasKey && docs.length) {
             if (docs.length >= largelimit) {
               largepage = largepage || 1;
               let startNum = (largepage - 1) * largelimit;
               docs = docs.slice(startNum, startNum + largelimit);
             }
-            await this.redis.listPush(listKey, docs.map(item => item.rowid));
-            this.redis.setKeyTimeout(listKey, _KeyTimeout); //设置listkey一小时后过期
+            await this.redis.listPush(cacheKey, docs.map(item => item[this.primarykey]));
+            this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
             return this.findList(data, false, addLock);
           }
           return {
@@ -296,7 +291,7 @@ class Model {
             resolve(true);
           }, _timeout);
         });
-        return this.findList(data, hasCache, addLock);
+        return this.findList(data, cacheKey, addLock);
       }
     }
   }
