@@ -277,7 +277,14 @@ class Model {
               let startNum = (largepage - 1) * largelimit;
               docs = docs.slice(startNum, startNum + largelimit);
             }
-            await this.redis.listPush(cacheKey, docs.map(item => item[this.primarykey].toString()));
+            await this.redis.listPush(cacheKey, docs.map(item => {
+              let itemVal = item[this.primarykey] || 0;
+              if(this.primarykey === '_id'){
+                return itemVal.toString();
+              }else{
+                return itemVal;
+              }
+            }));
             this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
             return this.findList(data, '', addLock);
           }
