@@ -95,7 +95,7 @@ class Model {
     if (!data) throw Util.error('create方法的参数data不能为空');
     if(!Util.isEmpty(data)) this.setData(data);
     if (this.primarykey === 'rowid' || data.rowid == 0){
-      let id = await this.redis.rowid();
+      let id = await this.db.rowid();
       this.setData('rowid', id);
       if (WOOD.config.isDebug) console.warn('新增id: ', id);
     }
