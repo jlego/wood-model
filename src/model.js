@@ -2,7 +2,6 @@
 // by YuRonghui 2018-11-18
 const { Query } = require('wood-query')();
 const { Util } = require('wood-util')();
-const cluster = require('cluster');
 const mongodb = require('mongodb');
 const ObjectId = mongodb.ObjectID;
 const largelimit = 20000; //限制不能超过2万条数据返回
@@ -12,7 +11,6 @@ const { catchErr, error, config } = WOOD;
 
 class Model {
   constructor(opts = {}) {
-    this._hasdata = false;
     this.tableName = opts.tableName || '';
     this.primarykey = opts.primarykey || '_id'; //默认主键名
     this.fields = opts.fields || {};
@@ -70,13 +68,11 @@ class Model {
   // 重置数据
   resetData() {
     this.fields.resetData();
-    this._hasdata = false;
   }
 
   // 设置数据
   setData(target, value) {
     this.fields.setData(target, value);
-    this._hasdata = true;
   }
 
   // 获取模型数据
@@ -85,8 +81,8 @@ class Model {
   }
 
   // 是否新的
-  isNew(data) {
-    return !data[this.primarykey];
+  isNew() {
+    return !this.getData()[this.primarykey];
   }
 
   //新增数据
