@@ -8,7 +8,7 @@ const ObjectId = mongodb.ObjectID;
 const largelimit = 20000; //限制不能超过2万条数据返回
 const _timeout = 0;
 const _KeyTimeout = 60 * 1; //设置listkey过期时间，秒
-const { catchErr, error } = WOOD;
+const { catchErr, error, config } = WOOD;
 
 class Model {
   constructor(opts = {}) {
@@ -259,8 +259,8 @@ class Model {
           }
         }
         query.where(idObj);
-        if (!isEmpty(this.select)) query.select(this.select);
-        if (!isEmpty(this.relation)) query.populate(this.relation);
+        if (!Util.isEmpty(this.select)) query.select(this.select);
+        if (!Util.isEmpty(this.relation)) query.populate(this.relation);
         let counts = this.db.count(query),
           lists = this.exec('find', query.toJSON());
         const countResult = await catchErr(counts);
