@@ -27,7 +27,7 @@ module.exports = (app = {}, config = {}) => {
           select,
           primarykey
         });
-        theModel.redis = new Redis(tableName, app);
+        theModel.redis = new Redis(tableName, dbName, app);
         theModel.db = new Mongo(tableName, dbName, app);
         app._models.set(tableName, theModel);
         theModel._init();
