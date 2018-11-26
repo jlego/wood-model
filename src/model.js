@@ -16,6 +16,7 @@ class Model {
     this.primarykey = opts.primarykey || '_id'; //默认主键名
     this.fields = opts.fields || {};
     this.select = opts.select || {};
+    this.ctx = opts.ctx;
     this.relation = {};
   }
 
@@ -25,11 +26,11 @@ class Model {
     for (let key in fieldMap) {
       obj[key] = {
         get() {
-          if (WOOD.config.isDebug) console.warn(`getter: ${key}`);
+          if (this.ctx.config.isDebug) console.warn(`getter: ${key}`);
           return fieldMap[key].value || fieldMap[key].defaultValue;
         },
         set(val) {
-          if (WOOD.config.isDebug) console.warn(`setter: ${key}, ${val}`);
+          if (this.ctx.config.isDebug) console.warn(`setter: ${key}, ${val}`);
           fieldMap[key].value = val;
         }
       }
@@ -97,7 +98,7 @@ class Model {
     if (this.primarykey === 'rowid' || data.rowid == 0){
       let id = await this.db.rowid();
       this.setData('rowid', id);
-      if (WOOD.config.isDebug) console.warn('新增id: ', id);
+      if (this.ctx.config.isDebug) console.warn('新增id: ', id);
     }
     let err = hascheck ? this.fields.validate() : false;
     if (err) throw Util.error(err);
@@ -188,7 +189,7 @@ class Model {
 
   // 执行查询
   exec(oper = 'find', data) {
-    if (WOOD.config.isDebug) console.warn(`data ${oper}: ${JSON.stringify(data)}`);
+    if (this.ctx.config.isDebug) console.warn(`data ${oper}: ${JSON.stringify(data)}`);
     if (this.db[oper]) {
       if (data.aggregate.length) {
         return this.db.aggregate(data.aggregate);
@@ -196,7 +197,7 @@ class Model {
         return this.db[oper](data);
       }
     }
-    return error(WOOD.error_code.error_nodata);
+    return error(this.ctx.error_code.error_nodata);
   }
 
   // 查询单条记录
