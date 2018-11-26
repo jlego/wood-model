@@ -6,7 +6,6 @@
 const Model = require('./src/model');
 
 module.exports = (app = {}, config = {}) => {
-  const { Util } = require('wood-util')(app);
   const { Redis } = require('wood-redis')(app);
   const { Mongo } = require('wood-mongo')(app);
   app._models = new Map();
