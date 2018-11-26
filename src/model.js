@@ -93,11 +93,7 @@ class Model {
     if (this.primarykey === 'rowid' || data.rowid == 0){
       let id = await this.db.rowid();
       this.setData('rowid', id);
-<<<<<<< HEAD
-      if (this.ctx.config.isDebug) console.warn('新增id: ', id);
-=======
-      if (config.isDebug) console.warn('新增id: ', id);
->>>>>>> abf5ef832e9427c1873138fc683614a422b0ed69
+      // if (this.ctx.config.isDebug) console.warn('新增id: ', id);
     }
     let err = hascheck ? this.fields.validate() : false;
     if (err) throw error(err);
@@ -188,11 +184,7 @@ class Model {
 
   // 执行查询
   exec(oper = 'find', data) {
-<<<<<<< HEAD
-    if (this.ctx.config.isDebug) console.warn(`data ${oper}: ${JSON.stringify(data)}`);
-=======
-    if (config.isDebug) console.warn(`data ${oper}: ${JSON.stringify(data)}`);
->>>>>>> abf5ef832e9427c1873138fc683614a422b0ed69
+    // if (config.isDebug) console.warn(`data ${oper}: ${JSON.stringify(data)}`);
     if (this.db[oper]) {
       if (data.aggregate.length) {
         return this.db.aggregate(data.aggregate);
@@ -200,11 +192,7 @@ class Model {
         return this.db[oper](data);
       }
     }
-<<<<<<< HEAD
     return error(this.ctx.error_code.error_nodata);
-=======
-    return error(error_code.error_nodata);
->>>>>>> abf5ef832e9427c1873138fc683614a422b0ed69
   }
 
   // 查询单条记录
