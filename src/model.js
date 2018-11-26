@@ -7,7 +7,6 @@ const ObjectId = mongodb.ObjectID;
 const largelimit = 20000; //限制不能超过2万条数据返回
 const _timeout = 0;
 const _KeyTimeout = 60 * 1; //设置listkey过期时间，秒
-const { catchErr, error, config } = WOOD;
 
 class Model {
   constructor(opts = {}) {
@@ -88,7 +87,7 @@ class Model {
 
   //新增数据
   async create(data = {}, addLock = true, hascheck = true) {
-    if (!data) throw error('create方法的参数data不能为空');
+    if (!data) throw this.ctx.error('create方法的参数data不能为空');
     if(!Util.isEmpty(data)) this.setData(data);
     if (this.primarykey === 'rowid' || data.rowid == 0){
       let id = await this.db.rowid();
@@ -96,30 +95,30 @@ class Model {
       // if (this.ctx.config.isDebug) console.warn('新增id: ', id);
     }
     let err = hascheck ? this.fields.validate() : false;
-    if (err) throw error(err);
-    const lock = addLock ? await catchErr(this.redis.lock()) : {data: 1};
+    if (err) throw this.ctx.error(err);
+    const lock = addLock ? await this.ctx.catchErr(this.redis.lock()) : {data: 1};
     if (lock.data) {
-      let result = await catchErr(this.db.create(this.getData()));
+      let result = await this.ctx.catchErr(this.db.create(this.getData()));
       if(addLock) this.redis.unlock(lock.data);
-      if(result.err) throw error(result.err);
+      if(result.err) throw this.ctx.error(result.err);
       return result.data;
     }else{
-      throw error(lock.err);
+      throw this.ctx.error(lock.err);
     }
   }
 
   // 更新数据
   async update(data = {}, addLock = true, hascheck = true, isFindOneAndUpdate) {
-    if (!data) throw error('update方法的参数data不能为空');
+    if (!data) throw this.ctx.error('update方法的参数data不能为空');
     if(!Util.isEmpty(data)) this.setData(data);
     if (!this.isNew()) {
       let err = hascheck ? this.fields.validate() : false,
         hasSet = false,
         id = data[this.primarykey];
       if (err) {
-        throw error(err);
+        throw this.ctx.error(err);
       } else {
-        let lock = addLock ? await catchErr(this.redis.lock()) : {data: 1};
+        let lock = addLock ? await this.ctx.catchErr(this.redis.lock()) : {data: 1};
         if (lock.data) {
           delete data[this.primarykey];
           let keys = Object.keys(data),
@@ -127,19 +126,19 @@ class Model {
             idObj = {};
           hasSet = keys[0].indexOf('$') === 0;
           idObj[this.primarykey] = id;
-          const result = await catchErr(this.db[method](idObj, hasSet ? data : { $set: data }));
+          const result = await this.ctx.catchErr(this.db[method](idObj, hasSet ? data : { $set: data }));
           if(addLock) this.redis.unlock(lock.data);
           if (result.data){
             return isFindOneAndUpdate ? result.data : idObj;
           }else{
-            throw error(result.err);
+            throw this.ctx.error(result.err);
           }
         }else{
-          throw error(lock.err);
+          throw this.ctx.error(lock.err);
         }
       }
     }
-    throw error(false);
+    throw this.ctx.error(false);
   }
   // 更新数据, 结果返回当前记录
   async findOneAndUpdate(data = {}, addLock = true, hascheck = true) {
@@ -149,14 +148,14 @@ class Model {
   // 保存数据
   async save() {
     let data = this.getData(false);
-    if (Util.isEmpty(data) || !data) throw error('save方法的data为空');
+    if (Util.isEmpty(data) || !data) throw this.ctx.error('save方法的data为空');
     if (!this.isNew()) {
-      const updateOk = await catchErr(this.update());
-      if (updateOk.err) throw error(updateOk.err);
+      const updateOk = await this.ctx.catchErr(this.update());
+      if (updateOk.err) throw this.ctx.error(updateOk.err);
       return updateOk.data;
     } else {
-      const result = await catchErr(this.create());
-      if (result.err) throw error(result.err);
+      const result = await this.ctx.catchErr(this.create());
+      if (result.err) throw this.ctx.error(result.err);
       return result.data;
     }
   }
@@ -164,9 +163,9 @@ class Model {
   //删除数据
   async remove(data) {
     if (!data) return false;
-    const lock = await catchErr(this.redis.lock());
+    const lock = await this.ctx.catchErr(this.redis.lock());
     if (lock.err) {
-      throw error(lock.err);
+      throw this.ctx.error(lock.err);
     }else{
       return this.db.remove(data);
     }
@@ -174,9 +173,9 @@ class Model {
 
   //清空数据
   async clear() {
-    const lock = await catchErr(this.redis.lock());
+    const lock = await this.ctx.catchErr(this.redis.lock());
     if (lock.err) {
-      throw error(lock.err);
+      throw this.ctx.error(lock.err);
     }else{
       return this.db.clear();
     }
@@ -192,14 +191,14 @@ class Model {
         return this.db[oper](data);
       }
     }
-    return error(this.ctx.error_code.error_nodata);
+    return this.ctx.error(this.ctx.error_code.error_nodata);
   }
 
   // 查询单条记录
   async findOne(data, addLock = true) {
-    const hasLock = addLock ? await catchErr(this.redis.hasLock()) : {};
+    const hasLock = addLock ? await this.ctx.catchErr(this.redis.hasLock()) : {};
     if(hasLock.err){
-      throw error(hasLock.err);
+      throw this.ctx.error(hasLock.err);
     }else{
       if (!hasLock.data) {
         let query = data, idObj = {};
@@ -214,9 +213,9 @@ class Model {
         }
         if (!Util.isEmpty(this.select)) query.select(this.select);
         if (!Util.isEmpty(this.relation)) query.populate(this.relation);
-        let result = await catchErr(this.exec('findOne', query.toJSON()));
+        let result = await this.ctx.catchErr(this.exec('findOne', query.toJSON()));
         if(result.err){
-          throw error(result.err);
+          throw this.ctx.error(result.err);
         }else{
           return Array.isArray(result.data) ? result.data[0] : result.data;
         }
@@ -233,10 +232,10 @@ class Model {
 
   // 查询数据列表
   async findList(data, cacheKey = '', addLock = true) {
-    if (!data) throw error('findList方法参数data不能为空');
-    let hasLock = addLock ? await catchErr(this.redis.hasLock()) : {};
+    if (!data) throw this.ctx.error('findList方法参数data不能为空');
+    let hasLock = addLock ? await this.ctx.catchErr(this.redis.hasLock()) : {};
     if(hasLock.err){
-      throw error(hasLock.err);
+      throw this.ctx.error(hasLock.err);
     }else{
       if (!hasLock.data) {
         let hasKey = false, largepage = 1;
@@ -260,10 +259,10 @@ class Model {
         if (!Util.isEmpty(this.relation)) query.populate(this.relation);
         let counts = this.db.count(query),
           lists = this.exec('find', query.toJSON());
-        const countResult = await catchErr(counts);
-        const docsResult = await catchErr(lists);
+        const countResult = await this.ctx.catchErr(counts);
+        const docsResult = await this.ctx.catchErr(lists);
         if (docsResult.err || countResult.err) {
-          throw error(docsResult.err || countResult.err);
+          throw this.ctx.error(docsResult.err || countResult.err);
         }else{
           let docs = docsResult.data;
           // 缓存id
