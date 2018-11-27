@@ -13,7 +13,7 @@ module.exports = (app = {}, config = {}) => {
     let nameArr = _tableName.split('.'),
       dbName = nameArr.length > 1 ? nameArr[0] : 'master',
       tableName = nameArr.length > 1 ? nameArr[1] : nameArr[0];
-    if(_tableName){
+    if(tableName){
       if(app._models.has(tableName)){
         let _model = app._models.get(tableName);
         if(_model) _model.resetData();
