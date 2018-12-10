@@ -100,9 +100,9 @@ class Model {
     const lock = addLock ? await catchErr(this.redis.lock()) : {data: 1};
     if (lock.data) {
       let result = await catchErr(this.db.create(this.getData()));
-      if(addLock) this.redis.unlock(lock.data);
+      if(addLock) catchErr(this.redis.unlock(lock.data));
       if(result.err) throw error(result.err);
-      return result.data;
+      return {id: result.data.insertedId};
     }else{
       throw error(lock.err);
     }
@@ -129,7 +129,7 @@ class Model {
           hasSet = keys[0].indexOf('$') === 0;
           idObj[this.primarykey] = id;
           const result = await catchErr(this.db[method](idObj, hasSet ? data : { $set: data }));
-          if(addLock) this.redis.unlock(lock.data);
+          if(addLock) catchErr(this.redis.unlock(lock.data));
           if (result.data){
             return isFindOneAndUpdate ? result.data : idObj;
           }else{
