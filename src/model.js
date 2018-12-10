@@ -38,7 +38,7 @@ class Model {
     let fields = this.fields.data || {};
     for (let key in fields) {
       let item = fields[key];
-      if (key == '_id') continue;
+      // if (key == '_id') continue;
       // 建索引
       if (item.index) {
         let indexField = {};
@@ -102,7 +102,9 @@ class Model {
       let result = await catchErr(this.db.create(this.getData()));
       if(addLock) catchErr(this.redis.unlock(lock.data));
       if(result.err) throw error(result.err);
-      return {id: result.data.insertedId};
+      let resultData = {};
+      resultData[this.primarykey] = result.data.insertedId;
+      return resultData;
     }else{
       throw error(lock.err);
     }
@@ -112,11 +114,11 @@ class Model {
   async update(data = {}, addLock = true, hascheck = true, isFindOneAndUpdate) {
     const { catchErr, error } = this.ctx;
     if (!data) throw error('update方法的参数data不能为空');
+    let id = data[this.primarykey];
     if(!Util.isEmpty(data)) this.setData(data);
     if (!this.isNew()) {
       let err = hascheck ? this.fields.validate() : false,
-        hasSet = false,
-        id = data[this.primarykey];
+        hasSet = false;
       if (err) {
         throw error(err);
       } else {
@@ -128,10 +130,17 @@ class Model {
             idObj = {};
           hasSet = keys[0].indexOf('$') === 0;
           idObj[this.primarykey] = id;
+          let idObjTemp = JSON.stringify(idObj);
           const result = await catchErr(this.db[method](idObj, hasSet ? data : { $set: data }));
           if(addLock) catchErr(this.redis.unlock(lock.data));
           if (result.data){
-            return isFindOneAndUpdate ? result.data : idObj;
+            if(isFindOneAndUpdate){
+              let resultData = {};
+              resultData[this.primarykey] = result.data.value[this.primarykey];
+              return resultData;
+            }else{
+              return JSON.parse(idObjTemp);
+            }
           }else{
             throw error(result.err);
           }
