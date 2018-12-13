@@ -41,9 +41,12 @@ class Model {
       // if (key == '_id') continue;
       // 建索引
       if (item.index) {
-        let indexField = {};
+        let indexField = {}, indexOption = {};
+        if(typeof item.index === 'object'){
+          indexOption = item.index;
+        }
         indexField[key] = item.index == 'text' ? item.index : 1 ;
-        this.db.index(indexField);
+        this.db.index(indexField, indexOption);
       }
       //表关联
       if (item.key && item.as && item.from) {
@@ -56,8 +59,8 @@ class Model {
   }
 
   // 创建索引
-  createIndex(opts = {}) {
-    if (!Util.isEmpty(opts)) this.db.collection.ensureIndex(opts);
+  createIndex(data = {}, opts = {}) {
+    if (!Util.isEmpty(data)) this.db.collection.ensureIndex(data, opts);
   }
 
   // 删除索引
@@ -116,7 +119,7 @@ class Model {
     if (!data) throw error('update方法的参数data不能为空');
     let id = data[this.primarykey];
     if(!Util.isEmpty(data)) this.setData(data);
-    if (!this.isNew()) {
+    if (!this.isNew() || id) {
       let err = hascheck ? this.fields.validate() : false,
         hasSet = false;
       if (err) {
@@ -180,10 +183,12 @@ class Model {
     if (lock.err) {
       throw error(lock.err);
     }else{
-      return this.db.remove(data);
+      const result =  await catchErr(this.db.remove(data));
+      if (result.err) throw error(result.err);
+      if (result.data.result.n === 0) {throw error('无对应数据')};
+      return {};
     }
   }
-
   //清空数据
   async clear() {
     const { catchErr, error } = this.ctx;
@@ -255,10 +260,10 @@ class Model {
     }else{
       if (!hasLock.data) {
         let hasKey = false, largepage = 1;
+        let page = data.page || 1;
         let query = data._isQuery ? data : Query(data);
         let _data = query.toJSON();
         let limit = _data.limit == undefined ? 20 : Number(_data.limit),
-          page = _data.page || 1,
           idObj = {};
         largepage = _data.largepage || 1;
         page = page % Math.ceil(largelimit / limit) || 1;
