@@ -120,7 +120,7 @@ class Model {
     let id = data[this.primarykey];
     if(!Util.isEmpty(data)) this.setData(data);
     if (!this.isNew() || id) {
-      let err = hascheck ? this.fields.validate() : false,
+      let err = hascheck ? this.fields.validate(data) : false,
         hasSet = false;
       if (err) {
         throw error(err);
@@ -131,7 +131,7 @@ class Model {
           let keys = Object.keys(data),
             method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update',
             idObj = {};
-          hasSet = keys[0].indexOf('$') === 0;
+          hasSet = !Util.isEmpty(keys) ? keys[0].indexOf('$') === 0 : false;
           idObj[this.primarykey] = id;
           let idObjTemp = JSON.stringify(idObj);
           const result = await catchErr(this.db[method](idObj, hasSet ? data : { $set: data }));
