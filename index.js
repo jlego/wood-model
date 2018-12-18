@@ -21,16 +21,15 @@ module.exports = (app = {}, config = {}) => {
       }
       if (tableName && fields) {
         let theModel = new Model({
-          ctx: app,
           tableName,
           fields,
           select,
           primarykey
         });
-        theModel.redis = new Redis(tableName, dbName, app);
-        theModel.db = new Mongo(tableName, dbName, app);
+        theModel.redis = new Redis(tableName, dbName);
+        theModel.db = new Mongo(tableName, dbName);
         app._models.set(tableName, theModel);
-        theModel._init();
+        theModel.init();
         return app._models.get(tableName);
       }
     }
