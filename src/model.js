@@ -14,7 +14,7 @@ class Model {
     this.primarykey = opts.primarykey || '_id'; //默认主键名
     this.fields = opts.fields || {};
     this.select = opts.select || {};
-    this.addLock = opts.addLock || false;
+    this.addLock = opts.addLock || true;
     this.relation = {};
   }
 
@@ -78,8 +78,8 @@ class Model {
   }
 
   // 获取模型数据
-  getData(hasVirtualField = true) {
-    return this.fields.getData(hasVirtualField);
+  getData(data) {
+    return this.fields.getData(data);
   }
 
   // 是否新的
@@ -90,46 +90,38 @@ class Model {
   //新增数据
   async create(data = {}) {
     const { catchErr, error } = WOOD;
-    if (!data) throw error('create方法的参数data不能为空');
-    if(!Util.isEmpty(data)) this.setData(data);
+    if(!data || Util.isEmpty(data)) throw error('create方法的参数data不能为空');
+    this.setData(data);
     if (this.primarykey === 'rowid' || data.rowid == 0){
       let id = await this.db.rowid();
       this.setData('rowid', id);
     }
     let err = this.fields.validate();
     if (err) throw error(err);
-    const lock = this.addLock ? await catchErr(this.redis.lock()) : {data: 1};
-    if (lock.err) throw error(lock.err);
-    let result = await catchErr(this.db.create(this.getData()));
-    if(this.addLock) catchErr(this.redis.unlock(lock.data));
-    if(result.err) throw error(result.err);
-    let resultData = {};
-    resultData._id = result.data.insertedId;
-    return resultData;
+    const lock = this.addLock ? await this.redis.lock() : true;
+    let result = await this.db.create(this.getData());
+    if(this.addLock) catchErr(this.redis.unlock(lock));
+    return {_id: result.insertedId};
   }
 
   // 更新数据
   async update(data = {}, value = {}, isFindOneAndUpdate) {
     const { catchErr, error } = WOOD;
-    if (!data) throw error('update方法的参数data不能为空');
-    if (!Util.isEmpty(value)) {
-      let err = this.fields.validate(data),
-        hasSet = false;
-      if (err) throw error(err);
-      let lock = this.addLock ? await catchErr(this.redis.lock()) : {data: 1};
-      if (lock.err) throw error(lock.err);
-      let method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update';
-      hasSet = value.indexOf('$') === 0;
-      const result = await catchErr(this.db[method](data, hasSet ? value : { $set: value }));
-      if(this.addLock) catchErr(this.redis.unlock(lock.data));
-      if (result.err) throw error(result.err);
-      if(isFindOneAndUpdate){
-        return result.data.value;
-      }else{
-        return result.data;
-      }
+    if (!data || Util.isEmpty(value)) throw error('update方法的参数data不能为空');
+    this.setData(value);
+    let err = this.fields.validate(value),
+      hasSet = false;
+    if (err) throw error(err);
+    let lock = this.addLock ? await this.redis.lock() : true;
+    let method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update';
+    hasSet = JSON.stringify(value).indexOf('$') === 0;
+    const result = await this.db[method](data, hasSet ? value : { $set: this.getData(value) });
+    if(this.addLock) catchErr(this.redis.unlock(lock));
+    if(isFindOneAndUpdate){
+      return result.value;
+    }else{
+      return { updated: result.result.nModified };
     }
-    throw error(false);
   }
 
   // 更新数据, 结果返回当前记录
@@ -144,36 +136,35 @@ class Model {
     if (Util.isEmpty(data) || !data) throw error('save方法的data为空');
     let err = this.fields.validate(data);
     if (err) throw error(err);
-    const lock = await catchErr(this.redis.lock());
-    if (lock.err) throw error(lock.err);
-    const result = await catchErr(this.db.collection.save(data));
-    if (result.err) throw error(result.err);
-    return result.data;
+    const lock = await this.redis.lock();
+    const result = await this.db.collection.save(data);
+    if(this.addLock) catchErr(this.redis.unlock(lock));
+    return result;
   }
 
   //删除数据
   async remove(data) {
     const { catchErr, error } = WOOD;
     if (!data) return false;
-    const lock = await catchErr(this.redis.lock());
-    if (lock.err) throw error(lock.err);
-    const result =  await catchErr(this.db.remove(data));
-    if (result.err) throw error(result.err);
-    if (result.data.result.n === 0) throw error('无对应数据');
+    const lock = await this.redis.lock();
+    const result =  await this.db.remove(data);
+    if(this.addLock) catchErr(this.redis.unlock(lock));
+    if (result.result.n === 0) throw error('无对应数据');
     return {};
   }
 
   //清空数据
   async clear() {
     const { catchErr, error } = WOOD;
-    const lock = await catchErr(this.redis.lock());
-    if (lock.err) throw error(lock.err);
-    return this.db.clear();
+    const lock = await this.redis.lock();
+    let result = await this.db.clear();
+    if(this.addLock) catchErr(this.redis.unlock(lock));
+    return result;
   }
 
   // 执行查询
   exec(oper = 'find', data) {
-    const { catchErr, error } = WOOD;
+    const { error } = WOOD;
     if (this.db[oper]) {
       if (data.aggregate.length) {
         return this.db.aggregate(data.aggregate);
@@ -187,9 +178,8 @@ class Model {
   // 查询单条记录
   async findOne(data) {
     const { catchErr, error } = WOOD;
-    const hasLock = this.addLock ? await catchErr(this.redis.hasLock()) : {};
-    if(hasLock.err) throw error(hasLock.err);
-    if (!hasLock.data) {
+    const hasLock = this.addLock ? await this.redis.hasLock() : false;
+    if (!hasLock) {
       let query = data, idObj = {};
       if(!data._isQuery){
         query = Query();
@@ -202,9 +192,8 @@ class Model {
       }
       if (!Util.isEmpty(this.select)) query.select(this.select);
       if (!Util.isEmpty(this.relation)) query.populate(this.relation);
-      let result = await catchErr(this.exec('findOne', query.toJSON()));
-      if(result.err) throw error(result.err);
-      return Array.isArray(result.data) ? result.data[0] : result.data;
+      let result = await this.exec('findOne', query.toJSON());
+      return Array.isArray(result) ? result[0] : result;
     } else {
       await new Promise((resolve, reject) => {
         setTimeout(() => {
@@ -219,9 +208,8 @@ class Model {
   async findList(data, cacheKey = '') {
     const { catchErr, error } = WOOD;
     if (!data) throw error('findList方法参数data不能为空');
-    let hasLock = this.addLock ? await catchErr(this.redis.hasLock()) : {};
-    if(hasLock.err) throw error(hasLock.err);
-    if (!hasLock.data) {
+    let hasLock = this.addLock ? await this.redis.hasLock() : false;
+    if (!hasLock) {
       let hasKey = false, largepage = 1;
       let page = data.page || 1;
       let query = data._isQuery ? data : Query(data);
@@ -234,19 +222,15 @@ class Model {
       if (hasKey) {
         let startIndex = (page - 1) * limit;
         idObj[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
-        if(this.primarykey === 'rowid'){
-          idObj[this.primarykey] = idObj[this.primarykey].map(item => parseInt(item));
-        }
+        idObj[this.primarykey] = idObj[this.primarykey].map(item => parseInt(item));
       }
       query.where(idObj);
       if (!Util.isEmpty(this.select)) query.select(this.select);
       if (!Util.isEmpty(this.relation)) query.populate(this.relation);
       let counts = this.db.count(query),
         lists = this.exec('find', query.toJSON());
-      const countResult = await catchErr(counts);
-      const docsResult = await catchErr(lists);
-      if (docsResult.err || countResult.err) throw error(docsResult.err || countResult.err);
-      let docs = docsResult.data;
+      const count = await counts;
+      const docs = await lists;
       // 缓存id
       if (cacheKey && !hasKey && docs.length) {
         if (docs.length >= largelimit) {
@@ -263,10 +247,10 @@ class Model {
           }
         }));
         this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
-        return this.findList(data, '');
+        return this.findList(data, cacheKey);
       }
       return {
-        count: Number(countResult.data),
+        count: Number(count),
         list: docs || []
       };
     }else{
