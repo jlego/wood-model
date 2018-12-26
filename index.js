@@ -9,7 +9,7 @@ module.exports = (app = {}, config = {}) => {
   const { Redis } = require('wood-redis')(app);
   const { Mongo } = require('wood-mongo')(app);
   app._models = new Map();
-  app.Model = function(_tableName, fields, select = {}, primarykey) {
+  app.Model = function(_tableName, fields, select = {}, primarykey, addLock) {
     let nameArr = _tableName.split('.'),
       dbName = nameArr.length > 1 ? nameArr[0] : 'master',
       tableName = nameArr.length > 1 ? nameArr[1] : nameArr[0];
@@ -24,7 +24,8 @@ module.exports = (app = {}, config = {}) => {
           tableName,
           fields,
           select,
-          primarykey
+          primarykey,
+          addLock
         });
         theModel.redis = new Redis(tableName, dbName);
         theModel.db = new Mongo(tableName, dbName);
