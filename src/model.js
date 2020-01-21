@@ -1,12 +1,11 @@
-// 数据模型基类
+﻿// 数据模型基类
 // by YuRonghui 2018-11-18
 const { Query } = require('wood-query')();
 const { Util } = require('wood-util')();
-const mongodb = require('mongodb');
-const ObjectId = mongodb.ObjectID;
-const largelimit = 20000; //限制不能超过2万条数据返回
+const largelimit = 2000; //限制不能超过2000条数据返回
 const _timeout = 0;
 const _KeyTimeout = 60 * 1; //设置listkey过期时间，秒
+const { error } = WOOD;
 
 class Model {
   constructor(opts = {}) {
@@ -24,7 +23,7 @@ class Model {
     for (let key in fieldMap) {
       obj[key] = {
         get() {
-          return fieldMap[key].value || fieldMap[key].defaultValue;
+          return fieldMap[key].value || fieldMap[key].default;
         },
         set(val) {
           fieldMap[key].value = val;
@@ -41,10 +40,10 @@ class Model {
       // 建索引
       if (item.index) {
         let indexField = {}, indexOption = {};
-        if(typeof item.index === 'object'){
+        if (typeof item.index === 'object') {
           indexOption = item.index;
         }
-        indexField[key] = item.index == 'text' ? item.index : 1 ;
+        indexField[key] = item.index == 'text' ? item.index : 1;
         this.db.index(indexField, indexOption);
       }
       //表关联
@@ -87,41 +86,56 @@ class Model {
     return !this.getData()[this.primarykey];
   }
 
+  async cleanListCache() {
+    const listkeyResult = await this.redis.smembers("listkey");
+    for (let item of listkeyResult) {
+      await this.redis.delKey(item);
+      await this.redis.srem("listkey", item);
+    }
+  }
+
   //新增数据
   async create(data = {}) {
-    const { catchErr, error } = WOOD;
-    if(!data || Util.isEmpty(data)) throw error('create方法的参数data不能为空');
-    this.setData(data);
-    if (this.primarykey === 'rowid' || data.rowid == 0){
+    if (!data || Util.isEmpty(data)) throw error('create方法的参数data不能为空');
+
+    if (this.primarykey === 'rowid' && !data.rowid) {
       let id = await this.db.rowid();
-      this.setData('rowid', id);
+      data.rowid = id;
     }
+    this.resetData();
+    this.setData(data);
     let err = this.fields.validate();
     if (err) throw error(err);
+    let newData = this.getData();
+
     const lock = this.addLock ? await this.redis.lock() : true;
-    let result = await this.db.create(this.getData());
-    if(this.addLock) catchErr(this.redis.unlock(lock));
-    return {_id: result.insertedId};
+    let result = await this.db.create(newData);
+    if (!result.err) {
+      await this.cleanListCache();
+    }
+    if (this.addLock) await this.redis.unlock(lock);
+    return { _id: result.insertedId };
   }
 
   // 更新数据
   async update(data = {}, value = {}, isFindOneAndUpdate) {
-    const { catchErr, error } = WOOD;
     if (!data || Util.isEmpty(value)) throw error('update方法的参数data不能为空');
+    if (value._id) delete value._id;
+    this.resetData();
     this.setData(value);
     let err = this.fields.validate(value),
       hasSet = false;
     if (err) throw error(err);
+    let newData = this.getData(value);
+
     let lock = this.addLock ? await this.redis.lock() : true;
     let method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update';
-    hasSet = JSON.stringify(value).indexOf('$') === 0;
-    const result = await this.db[method](data, hasSet ? value : { $set: this.getData(value) });
-    if(this.addLock) catchErr(this.redis.unlock(lock));
-    if(isFindOneAndUpdate){
-      return result.value;
-    }else{
-      return { updated: result.result.nModified };
-    }
+    hasSet = JSON.stringify(value).indexOf('$') >= 0;
+    const result = await this.db[method](data, hasSet ? value : { $set: newData });
+    if (!result.err) await this.cleanListCache();
+    if (this.addLock) await this.redis.unlock(lock);
+    if (isFindOneAndUpdate) return result.value;
+    return { updated: result.result.nModified };
   }
 
   // 更新数据, 结果返回当前记录
@@ -131,57 +145,54 @@ class Model {
 
   // 保存数据
   async save(_data) {
-    const { catchErr, error } = WOOD;
     let data = _data || this.getData(false);
     if (Util.isEmpty(data) || !data) throw error('save方法的data为空');
     let err = this.fields.validate(data);
     if (err) throw error(err);
     const lock = await this.redis.lock();
     const result = await this.db.collection.save(data);
-    if(this.addLock) catchErr(this.redis.unlock(lock));
+    if (!result.err) await this.cleanListCache();
+    if (this.addLock) await this.redis.unlock(lock);
     return result;
   }
 
   //删除数据
   async remove(data) {
-    const { catchErr, error } = WOOD;
     if (!data) return false;
     const lock = await this.redis.lock();
-    const result =  await this.db.remove(data);
-    if(this.addLock) catchErr(this.redis.unlock(lock));
+    const result = await this.db.remove(data);
+    if (result.result.n !== 0) {
+      await this.cleanListCache();
+    }
+    if (this.addLock) await this.redis.unlock(lock);
     if (result.result.n === 0) throw error('无对应数据');
     return {};
   }
 
   //清空数据
   async clear() {
-    const { catchErr, error } = WOOD;
     const lock = await this.redis.lock();
     let result = await this.db.clear();
-    if(this.addLock) catchErr(this.redis.unlock(lock));
+    if (!result.err) await this.cleanListCache();
+    if (this.addLock) await this.redis.unlock(lock);
     return result;
   }
 
   // 执行查询
-  exec(oper = 'find', data) {
-    const { error } = WOOD;
+  exec(oper = 'find', query) {
     if (this.db[oper]) {
-      if (data.aggregate.length) {
-        return this.db.aggregate(data.aggregate);
-      } else {
-        return this.db[oper](data);
-      }
+      if (query.data.aggregate.length) return this.db.aggregate(query.data.aggregate);
+      return this.db[oper](query);
     }
     throw error(error_code.error_nodata);
   }
 
   // 查询单条记录
   async findOne(data) {
-    const { catchErr, error } = WOOD;
     const hasLock = this.addLock ? await this.redis.hasLock() : false;
     if (!hasLock) {
       let query = data, idObj = {};
-      if(!data._isQuery){
+      if (!data._isQuery) {
         query = Query();
         if (typeof data === 'number') {
           idObj[this.primarykey] = data;
@@ -192,75 +203,133 @@ class Model {
       }
       if (!Util.isEmpty(this.select)) query.select(this.select);
       if (!Util.isEmpty(this.relation)) query.populate(this.relation);
-      let result = await this.exec('findOne', query.toJSON());
+      let result = await this.exec('findOne', query);
       return Array.isArray(result) ? result[0] : result;
+    }
+    await new Promise((resolve, reject) => {
+      setTimeout(() => {
+        resolve(true);
+      }, _timeout);
+    });
+    return this.findOne(data);
+  }
+
+  // 带缓存的
+  async findListHasCache(data, cacheKey = '') {
+    if (!cacheKey) throw error('findListHasCache方法参数cacheKey不能为空');
+    let hasLock = this.addLock ? await this.redis.hasLock() : false;
+    if (!hasLock) {
+      let hasKey = false, largepage = 1, count = 0, lists = [];
+      let query = data._isQuery ? data : Query(data);
+      let _data = query.toJSON();
+      let page = query.page || 1;
+      let limit = _data.limit == undefined ? 20 : Number(_data.limit),
+        idObj = {};
+      largepage = query.largepage || 1;
+      page = page % Math.ceil(largelimit / limit) || 1;
+      hasKey = await this.redis.existKey(cacheKey); //key是否存在
+      if (!Util.isEmpty(this.relation)) query.populate(this.relation);
+      if (hasKey) {
+        let startIndex = (page - 1) * limit;
+        idObj[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
+        idObj[this.primarykey] = idObj[this.primarykey].map(item => /^-?[1-9]\d*$/.test(item) ? parseInt(item) : item);
+        query.where(idObj);
+        if (!Util.isEmpty(this.select)) query.select(this.select);
+        count = await this.redis.listCount(cacheKey);
+        lists = await this.exec('find', query);
+      } else {
+        let oldSelect = Util.deepCopy(_data.select);
+        query.where(idObj);
+        let selectObj = {};
+        selectObj[this.primarykey] = 1;
+        query.select(selectObj);
+        lists = await this.exec('find', query);
+        if (lists.length >= largelimit) {
+          largepage = largepage || 1;
+          let startNum = (largepage - 1) * largelimit;
+          lists = lists.slice(startNum, startNum + largelimit);
+        }
+
+        if (!lists.length) return { count: Number(count), list: [] };
+
+        await this.redis.listPush(cacheKey, lists.map(item => {
+          let itemVal = item[this.primarykey] || 0;
+          if (this.primarykey === '_id') return itemVal.toString();
+          return itemVal;
+        }));
+        await this.redis.sadd("listkey", cacheKey);
+        this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
+        _data.select = oldSelect;
+        return this.findListHasCache(data, cacheKey);
+      }
+      return {
+        count: Number(count),
+        list: lists || []
+      };
+    }
+    await new Promise((resolve, reject) => {
+      setTimeout(() => {
+        resolve(true);
+      }, _timeout);
+    });
+    return this.findListHasCache(data, cacheKey);
+  }
+
+  async findListNoCache(data) {
+    let hasLock = this.addLock ? await this.redis.hasLock() : false;
+    if (!hasLock) {
+      let query = data._isQuery ? data : Query(data);
+      let _data = query.toJSON();
+      let limit = _data.limit == undefined ? 20 : Number(_data.limit);
+      let page = query.page || 1;
+      let largepage = query.largepage || 1;
+      page = page % Math.ceil(largelimit / limit) || 1;
+      let startIndex = (page - 1) * limit;
+      let startNum = (largepage - 1) * largelimit;
+      if (startNum) startIndex = startIndex + startNum;
+
+      let oldSelect = Util.deepCopy(_data.select);
+      let selectObj = {};
+      selectObj[this.primarykey] = 1;
+      query.select(selectObj);
+
+      let lists = await this.exec('find', query);
+      let count = lists.length > 0 ? lists.length : 0;
+      if (lists.length > startIndex) {
+        let idObj = {};
+        idObj[this.primarykey] = lists.slice(startIndex, startIndex + limit);
+        idObj[this.primarykey] = idObj[this.primarykey].map(item => {
+          let itemVal = item[this.primarykey] || 0;
+          if (this.primarykey === '_id') return itemVal.toString();
+          return itemVal;
+        })
+        query.where(idObj);
+        _data.select = oldSelect;
+        if (!Util.isEmpty(this.select)) query.select(this.select);
+        lists = await this.exec('find', query);
+      } else {
+        lists = [];
+      }
+
+      return {
+        count: Number(count),
+        list: lists || []
+      };
     } else {
       await new Promise((resolve, reject) => {
         setTimeout(() => {
           resolve(true);
         }, _timeout);
       });
-      return this.findOne(data);
+      return this.findListNoCache(data);
     }
   }
 
   // 查询数据列表
   async findList(data, cacheKey = '') {
-    const { catchErr, error } = WOOD;
     if (!data) throw error('findList方法参数data不能为空');
-    let hasLock = this.addLock ? await this.redis.hasLock() : false;
-    if (!hasLock) {
-      let hasKey = false, largepage = 1;
-      let page = data.page || 1;
-      let query = data._isQuery ? data : Query(data);
-      let _data = query.toJSON();
-      let limit = _data.limit == undefined ? 20 : Number(_data.limit),
-        idObj = {};
-      largepage = _data.largepage || 1;
-      page = page % Math.ceil(largelimit / limit) || 1;
-      hasKey = await this.redis.existKey(cacheKey); //key是否存在
-      if (hasKey) {
-        let startIndex = (page - 1) * limit;
-        idObj[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
-        idObj[this.primarykey] = idObj[this.primarykey].map(item => parseInt(item));
-      }
-      query.where(idObj);
-      if (!Util.isEmpty(this.select)) query.select(this.select);
-      if (!Util.isEmpty(this.relation)) query.populate(this.relation);
-      let counts = this.db.count(query),
-        lists = this.exec('find', query.toJSON());
-      const count = await counts;
-      const docs = await lists;
-      // 缓存id
-      if (cacheKey && !hasKey && docs.length) {
-        if (docs.length >= largelimit) {
-          largepage = largepage || 1;
-          let startNum = (largepage - 1) * largelimit;
-          docs = docs.slice(startNum, startNum + largelimit);
-        }
-        await this.redis.listPush(cacheKey, docs.map(item => {
-          let itemVal = item[this.primarykey] || 0;
-          if(this.primarykey === '_id'){
-            return itemVal.toString();
-          }else{
-            return itemVal;
-          }
-        }));
-        this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
-        return this.findList(data, cacheKey);
-      }
-      return {
-        count: Number(count),
-        list: docs || []
-      };
-    }else{
-      await new Promise((resolve, reject) => {
-        setTimeout(() => {
-          resolve(true);
-        }, _timeout);
-      });
-      return this.findList(data, cacheKey);
-    }
+    if (cacheKey) return await this.findListHasCache(data, cacheKey);
+    return await this.findListNoCache(data);
   }
 }
 
