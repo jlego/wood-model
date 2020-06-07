@@ -1,6 +1,6 @@
 {
   "name": "wood-model",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -20,9 +20,9 @@
   },
   "homepage": "https://github.com/jlego/wood-model#readme",
   "dependencies": {
-    "wood-mongo": "^1.0.8",
-    "wood-query": "^1.0.7",
-    "wood-redis": "^1.0.4",
-    "wood-util": "^1.0.5"
+    "wood-mongo": "^1.1.0",
+    "wood-query": "^1.0.14",
+    "wood-redis": "^1.2.0",
+    "wood-util": "^1.0.17"
   }
 }
