@@ -1,6 +1,6 @@
 {
   "name": "wood-model",
-  "version": "1.1.1",
+  "version": "1.2.2",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -22,7 +22,6 @@
   "dependencies": {
     "wood-mongo": "^1.1.0",
     "wood-query": "^1.0.14",
-    "wood-redis": "^1.2.0",
     "wood-util": "^1.0.17"
   }
 }

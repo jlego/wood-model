@@ -1,12 +1,8 @@
 ﻿// 数据模型基类
-// by YuRonghui 2018-11-18
+// by YuRonghui 2020-7-22
 const { Query } = require('wood-query')();
 const { Util } = require('wood-util')();
-const mongodb = require('mongodb');
-const ObjectId = mongodb.ObjectID;
-const largelimit = 2000; //限制不能超过2000条数据返回
-const _timeout = 0;
-const _KeyTimeout = 60 * 1; //设置listkey过期时间，秒
+const skipLimit = 50000; //限制不能超过50000条数据跳过
 
 class Model {
   constructor(opts = {}) {
@@ -87,35 +83,15 @@ class Model {
     return !this.getData()[this.primarykey];
   }
 
-  async cleanListCache() {
-    const listkeyResult = await this.redis.smembers("listkey");
-    for (let item of listkeyResult) {
-      await this.redis.delKey(item);
-      await this.redis.srem("listkey", item);
-    }
-  }
-
   //新增数据
   async create(data = {}) {
-    const { catchErr, error } = WOOD;
+    const { error } = WOOD;
     if(!data || Util.isEmpty(data)) throw error('create方法的参数data不能为空');
     this.setData(data);
-    let newData = this.getData();
-
-    if (this.primarykey === 'rowid' || data.rowid == 0){
-      let id = await this.db.rowid();
-      newData['rowid'] = id;
-    }
     let err = this.fields.validate();
     if (err) throw error(err);
-    
-    const lock = this.addLock ? await this.redis.lock() : true;
-    let result = await this.db.create(newData);
-    if (!result.err) {
-      await this.cleanListCache();
-    }
-    if(this.addLock) catchErr(this.redis.unlock(lock));
-    return {_id: result.insertedId};
+    let result = await this.db.create(this.getData());
+    return { _id: result.insertedId };
   }
 
   // 更新数据
@@ -127,15 +103,9 @@ class Model {
       hasSet = false;
     if (err) throw error(err);
     let newData = this.getData(value);
-
-    let lock = this.addLock ? await this.redis.lock() : true;
     let method = isFindOneAndUpdate ? 'findOneAndUpdate' : 'update';
     hasSet = JSON.stringify(value).indexOf('$') >= 0;
     const result = await this.db[method](data, hasSet ? value : { $set: newData });
-    if (!result.err) {
-      await this.cleanListCache();
-    }
-    if(this.addLock) catchErr(this.redis.unlock(lock));
     if(isFindOneAndUpdate){
       return result.value;
     }else{
@@ -149,45 +119,26 @@ class Model {
   }
 
   // 保存数据
-  async save(_data) {
-    const { catchErr, error } = WOOD;
-    let data = _data || this.getData(false);
-    if (Util.isEmpty(data) || !data) throw error('save方法的data为空');
+  async save() {
+    const { error } = WOOD;
+    let data = this.getData();
     let err = this.fields.validate(data);
     if (err) throw error(err);
-    const lock = await this.redis.lock();
-    const result = await this.db.collection.save(data);
-    if (!result.err) {
-      await this.cleanListCache();
-    }
-    if(this.addLock) catchErr(this.redis.unlock(lock));
-    return result;
+    return await this.db.collection.save(data);
   }
 
   //删除数据
   async remove(data) {
-    const { catchErr, error } = WOOD;
+    const { error } = WOOD;
     if (!data) return false;
-    const lock = await this.redis.lock();
     const result =  await this.db.remove(data);
-    if (result.result.n !== 0) {
-      await this.cleanListCache();
-    }
-    if(this.addLock) catchErr(this.redis.unlock(lock));
     if (result.result.n === 0) throw error('无对应数据');
-    return {};
+    return { _id: data._id };
   }
 
   //清空数据
   async clear() {
-    const { catchErr, error } = WOOD;
-    const lock = await this.redis.lock();
-    let result = await this.db.clear();
-    if (!result.err) {
-      await this.cleanListCache();
-    }
-    if(this.addLock) catchErr(this.redis.unlock(lock));
-    return result;
+    return await this.db.clear();
   }
 
   // 执行查询
@@ -205,166 +156,40 @@ class Model {
 
   // 查询单条记录
   async findOne(data) {
-    const { catchErr, error } = WOOD;
-    const hasLock = this.addLock ? await this.redis.hasLock() : false;
-    if (!hasLock) {
-      let query = data, idObj = {};
-      if(!data._isQuery){
-        query = Query();
-        if (typeof data === 'number') {
-          idObj[this.primarykey] = data;
-          query.where(idObj);
-        } else if (typeof data === 'object') {
-          query.where(data);
-        }
+    let query = data, idObj = {};
+    if(!data._isQuery){
+      if (typeof data === 'number') {
+        idObj[this.primarykey] = data;
+        query = Query(idObj);
+      } else if (typeof data === 'object') {
+        query = Query(data);
       }
-      if (!Util.isEmpty(this.select)) query.select(this.select);
-      if (!Util.isEmpty(this.relation)) query.populate(this.relation);
-      let result = await this.exec('findOne', query.toJSON());
-      return Array.isArray(result) ? result[0] : result;
-    } else {
-      await new Promise((resolve, reject) => {
-        setTimeout(() => {
-          resolve(true);
-        }, _timeout);
-      });
-      return this.findOne(data);
     }
-  }
-
-  // 带缓存的
-  async findListHasCache(data, cacheKey = '') {
-    const { catchErr, error } = WOOD;
-    if (!cacheKey) throw error('findListHasCache方法参数cacheKey不能为空');
-    let hasLock = this.addLock ? await this.redis.hasLock() : false;
-    if (!hasLock) {
-      let hasKey = false, largepage = 1, count = 0, lists = []; 
-      let query = data._isQuery ? data : Query(data); 
-      let _data = query.toJSON();
-      let page = query.page || 1;
-      let limit = _data.limit == undefined ? 20 : Number(_data.limit),
-        idObj = {};
-      largepage = query.largepage || 1;
-      page = page % Math.ceil(largelimit / limit) || 1;
-      hasKey = await this.redis.existKey(cacheKey); //key是否存在
-      if (!Util.isEmpty(this.relation)) query.populate(this.relation);
-      if (hasKey) {
-        let startIndex = (page - 1) * limit;
-        idObj[this.primarykey] = await this.redis.listSlice(cacheKey, startIndex, startIndex + limit - 1);
-        idObj[this.primarykey] = idObj[this.primarykey].map(item => /^-?[1-9]\d*$/.test(item) ? parseInt(item) : item);
-        query.where(idObj);
-        if (!Util.isEmpty(this.select)) query.select(this.select);
-        count = await this.redis.listCount(cacheKey);
-        lists = await this.exec('find', query.toJSON());
-      } else {  
-        let oldSelect = Util.deepCopy(_data.select);  
-        query.where(idObj);
-        let selectObj = {};
-        selectObj[this.primarykey] = 1;
-        query.select(selectObj);
-        lists = await this.exec('find', query.toJSON());
-        if (lists.length >= largelimit) {
-          largepage = largepage || 1;
-          let startNum = (largepage - 1) * largelimit;
-          lists = lists.slice(startNum, startNum + largelimit);
-        }
-
-        if (lists.length === 0)
-        return {
-          count: Number(count),
-          list: []
-        };
-
-        await this.redis.listPush(cacheKey, lists.map(item => {
-          let itemVal = item[this.primarykey] || 0;
-          if(this.primarykey === '_id'){
-            return itemVal.toString();
-          }else{
-            return itemVal;
-          }
-        }));
-        await this.redis.sadd("listkey", cacheKey);
-        this.redis.setKeyTimeout(cacheKey, _KeyTimeout); //设置listkey一小时后过期
-        _data.select = oldSelect;
-        return this.findListHasCache(data, cacheKey);
-      }
-      return {
-        count: Number(count),
-        list: lists || []
-      };
-    }else{
-      await new Promise((resolve, reject) => {
-        setTimeout(() => {
-          resolve(true);
-        }, _timeout);
-      });
-      return this.findListHasCache(data, cacheKey);
-    }
-  }
-
-  async findListNoCache(data) {
-    const { catchErr, error } = WOOD;
-    let hasLock = this.addLock ? await this.redis.hasLock() : false;
-    if (!hasLock) {
-      let query = data._isQuery ? data : Query(data);
-      let _data = query.toJSON();
-      let limit = _data.limit == undefined ? 20 : Number(_data.limit);
-      let page = query.page || 1;
-      let largepage = query.largepage || 1;
-      page = page % Math.ceil(largelimit / limit) || 1;
-      let startIndex = (page - 1) * limit;
-      let startNum = (largepage - 1) * largelimit;
-      if (startNum) startIndex = startIndex + startNum;
-
-      let oldSelect = Util.deepCopy(_data.select);
-      let selectObj = {};
-      selectObj[this.primarykey] = 1;
-      query.select(selectObj);
-
-      let lists = await this.exec('find', query.toJSON());
-      let count = lists.length > 0 ? lists.length : 0;
-      if (lists.length > startIndex) {
-        let idObj = {};
-        idObj[this.primarykey] = lists.slice(startIndex, startIndex + limit);
-        idObj[this.primarykey] = idObj[this.primarykey].map(item => {
-          let itemVal = item[this.primarykey] || 0;
-          if(this.primarykey === '_id'){
-            return itemVal.toString();
-          }else{
-            return itemVal;
-          }
-        })
-        query.where(idObj);
-        _data.select = oldSelect;
-        if (!Util.isEmpty(this.select)) query.select(this.select);
-        lists = await this.exec('find', query.toJSON());
-      } else {
-        lists = [];
-      }
-
-      return {
-        count: Number(count),
-        list: lists || []
-      };
-    } else {
-      await new Promise((resolve, reject) => {
-        setTimeout(() => {
-          resolve(true);
-        }, _timeout);
-      });
-      return this.findListNoCache(data);
-    }
+    if (!Util.isEmpty(this.select)) query.select(this.select);
+    if (!Util.isEmpty(this.relation)) query.populate(this.relation);
+    let result = await this.exec('findOne', query.toJSON());
+    return Array.isArray(result) ? result[0] : result;
   }
 
   // 查询数据列表
-  async findList(data, cacheKey = '') {
+  async findList(data) {
     if (!data) throw error('findList方法参数data不能为空');
-    if(cacheKey){
-      return await this.findListHasCache(data, cacheKey);
-    }else{
-      return await this.findListNoCache(data);
-    }
+    let query = data._isQuery ? data : Query(data);
+    let _data = query.toJSON();
+    let limitNum = _data.limit == undefined ? 100 : Number(_data.limit);
+    let page = Number(query.page) || 1;
+    let skipNum = limitNum * (page - 1)
+    let count = await this.db.count(query.toJSON());
+    query.skip(skipNum > skipLimit ? skipLimit : skipNum)
+    query.limit(limitNum)
+    if (!Util.isEmpty(this.select)) query.select(this.select);
+    if (!Util.isEmpty(this.relation)) query.populate(this.relation);
+    let lists = await this.exec('find', query.toJSON());
+    return {
+      total: Number(count),
+      list: lists || []
+    };
   }
-}
 
+}
 module.exports = Model;
